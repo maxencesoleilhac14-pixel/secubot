@@ -483,6 +483,17 @@ def is_banned(user_id: int) -> bool:
     return bool(record and record.get("status") == "banned")
 
 
+def lookup_user_by_username(username: str) -> int | None:
+    ensure_data()
+    needle = (username or "").strip().lstrip("@").lower()
+    if not needle:
+        return None
+    for record in DATA["users"].values():
+        if str(record.get("username") or "").lower() == needle:
+            return record.get("id")
+    return None
+
+
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
@@ -1023,6 +1034,9 @@ def resolve_target_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         arg = context.args[0].lstrip("@")
         if arg.isdigit():
             return int(arg)
+        resolved = lookup_user_by_username(arg)
+        if resolved is not None:
+            return resolved
 
     return None
 
@@ -1058,9 +1072,13 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     target_id = resolve_target_id(update, context)
     if target_id is None:
         if is_private_chat(update):
-            await message.reply_text("Usage: /ban 123456789")
+            await message.reply_text(
+                "Usage: /ban 123456789 ou /ban @username (reponds a son message si inconnu du bot)"
+            )
         else:
-            await message.reply_text("Usage: reponds a un message avec /ban, ou /ban 123456789")
+            await message.reply_text(
+                "Usage: reponds a un message avec /ban, ou /ban 123456789, ou /ban @username"
+            )
         return
 
     if target_id == actor.id:
@@ -1098,9 +1116,13 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     target_id = resolve_target_id(update, context)
     if target_id is None:
         if is_private_chat(update):
-            await message.reply_text("Usage: /unban 123456789")
+            await message.reply_text(
+                "Usage: /unban 123456789 ou /unban @username (reponds a son message si inconnu du bot)"
+            )
         else:
-            await message.reply_text("Usage: reponds a un message avec /unban, ou /unban 123456789")
+            await message.reply_text(
+                "Usage: reponds a un message avec /unban, ou /unban 123456789, ou /unban @username"
+            )
         return
 
     target = get_user(target_id)
@@ -2003,6 +2025,14 @@ async def chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     status = record.get("status") if record else "unknown"
     backup_chat_id = get_backup_chat_id()
 
+    try:
+        requester = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+        if requester.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+            LOGGER.info("Join request ignore (admin): user %s -> chat %s", user_id, chat_id)
+            return
+    except Exception:
+        pass
+
     is_backup_chat = backup_chat_id is not None and chat_id == backup_chat_id
     if is_backup_chat:
         allowed = status in ("approved", "pending_backup")
@@ -2025,6 +2055,42 @@ async def chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             LOGGER.info("Join request refuse: user %s -> chat %s (statut %s)", user_id, chat_id, status)
         except Exception as exc:
             LOGGER.warning("Impossible de refuser la demande %s -> %s: %s", user_id, chat_id, exc)
+
+
+async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    message = update.effective_message
+    if chat is None or message is None or chat.type not in ("group", "supergroup"):
+        return
+    new_members = message.new_chat_members
+    if not new_members:
+        return
+
+    backup_chat_id = get_backup_chat_id()
+    for member in new_members:
+        if member.is_bot:
+            continue
+        try:
+            chat_member = await context.bot.get_chat_member(chat_id=chat.id, user_id=member.id)
+        except Exception:
+            continue
+        if chat_member.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+            continue
+
+        record = get_user(member.id)
+        status = record.get("status") if record else "unknown"
+        ok = status == "approved"
+        if ok and backup_chat_id and not await is_chat_member(context, backup_chat_id, member.id):
+            ok = False
+        if ok:
+            continue
+
+        try:
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=member.id)
+            await context.bot.unban_chat_member(chat_id=chat.id, user_id=member.id)
+            LOGGER.info("Membre non autorise exclu: %s de %s (statut %s)", member.id, chat.id, status)
+        except Exception as exc:
+            LOGGER.warning("Exclusion de %s dans %s impossible: %s", member.id, chat.id, exc)
 
 
 async def my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2129,6 +2195,7 @@ def main() -> None:
     app.add_handler(ChatMemberHandler(my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(ChatJoinRequestHandler(chat_join_request))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handle_new_members))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_media))
