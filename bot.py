@@ -917,37 +917,78 @@ async def servers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text("🔗 Serveurs lies", reply_markup=build_servers_admin_menu())
 
 
-async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_private_chat(update):
-        await send_private_only_notice(update)
-        return
+def record_ban(user_id: int) -> None:
+    ensure_data()
+    record = DATA["users"].get(str(user_id))
+    if record is None:
+        record = {
+            "id": user_id,
+            "username": "",
+            "first_name": "",
+            "last_name": "",
+            "full_name": str(user_id),
+            "status": "banned",
+            "subscribed": False,
+            "human_verified": False,
+            "intro_text": "",
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+            "approved_at": None,
+            "rejected_at": None,
+            "banned_at": utc_now(),
+            "review_requested_at": None,
+            "last_challenge": {},
+            "admin_note": "",
+            "risk_flags": [],
+        }
+        DATA["users"][str(user_id)] = record
+    else:
+        set_status(record, "banned")
+        record["banned_at"] = utc_now()
+        record["subscribed"] = False
+    save_data()
 
+
+def resolve_target_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int | None:
+    message = update.effective_message
+    if message is None:
+        return None
+
+    reply = message.reply_to_message
+    if reply is not None and reply.from_user is not None:
+        return reply.from_user.id
+
+    if context.args:
+        arg = context.args[0].lstrip("@")
+        if arg.isdigit():
+            return int(arg)
+
+    return None
+
+
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     actor = update.effective_user
     message = update.effective_message
-    if actor is None or message is None or not is_admin(actor.id):
-        if message:
-            await message.reply_text("🔐 Commande reservee aux admins.")
+    if actor is None or message is None:
         return
 
-    if not context.args:
-        await message.reply_text("Usage: /ban 123456789")
+    if not is_admin(actor.id):
+        await message.reply_text("🔐 Commande reservee aux admins.")
         return
 
-    try:
-        target_id = int(context.args[0])
-    except ValueError:
-        await message.reply_text("❌ ID invalide.")
+    target_id = resolve_target_id(update, context)
+    if target_id is None:
+        if is_private_chat(update):
+            await message.reply_text("Usage: /ban 123456789")
+        else:
+            await message.reply_text("Usage: reponds a un message avec /ban, ou /ban 123456789")
         return
 
-    target = get_user(target_id)
-    if not target:
-        await message.reply_text("❌ Utilisateur introuvable dans la base.")
+    if target_id == actor.id:
+        await message.reply_text("❌ Tu ne peux pas te bannir toi-meme.")
         return
 
-    set_status(target, "banned")
-    target["banned_at"] = utc_now()
-    target["subscribed"] = False
-    save_data()
+    record_ban(target_id)
 
     try:
         await context.bot.send_message(target_id, "⛔ Acces retire par un admin.")
@@ -963,40 +1004,33 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_private_chat(update):
-        await send_private_only_notice(update)
-        return
-
     actor = update.effective_user
     message = update.effective_message
-    if actor is None or message is None or not is_admin(actor.id):
-        if message:
-            await message.reply_text("🔐 Commande reservee aux admins.")
+    if actor is None or message is None:
         return
 
-    if not context.args:
-        await message.reply_text("Usage: /unban 123456789")
+    if not is_admin(actor.id):
+        await message.reply_text("🔐 Commande reservee aux admins.")
         return
 
-    try:
-        target_id = int(context.args[0])
-    except ValueError:
-        await message.reply_text("❌ ID invalide.")
+    target_id = resolve_target_id(update, context)
+    if target_id is None:
+        if is_private_chat(update):
+            await message.reply_text("Usage: /unban 123456789")
+        else:
+            await message.reply_text("Usage: reponds a un message avec /unban, ou /unban 123456789")
         return
 
     target = get_user(target_id)
-    if not target:
-        await message.reply_text("❌ Utilisateur introuvable dans la base.")
-        return
+    if target is not None:
+        set_status(target, "approved")
+        target["subscribed"] = True
+        save_data()
 
-    set_status(target, "approved")
-    target["subscribed"] = True
-    save_data()
-
-    try:
-        await send_approved_content(target_id, context)
-    except Exception as exc:
-        LOGGER.warning("Impossible de notifier l'utilisateur %s: %s", target_id, exc)
+        try:
+            await send_approved_content(target_id, context)
+        except Exception as exc:
+            LOGGER.warning("Impossible de notifier l'utilisateur %s: %s", target_id, exc)
 
     results = await unban_everywhere(context, target_id)
     if linked_groups():
