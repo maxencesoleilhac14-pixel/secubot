@@ -2011,6 +2011,27 @@ async def auto_configure_backup(application: Application) -> None:
             return
 
 
+async def verify_linked_groups(application: Application) -> None:
+    for group_id in linked_groups():
+        try:
+            member = await application.bot.get_chat_member(
+                chat_id=group_id, user_id=application.bot.id
+            )
+            if member.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+                LOGGER.info(
+                    "Admin OK dans %s (%s)", group_id, group_title(group_id)
+                )
+            else:
+                LOGGER.warning(
+                    "Plus admin dans %s (%s) status=%s",
+                    group_id,
+                    group_title(group_id),
+                    member.status,
+                )
+        except Exception as exc:
+            LOGGER.warning("Verif admin dans %s impossible: %s", group_id, exc)
+
+
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
@@ -2023,8 +2044,9 @@ async def post_init(application: Application) -> None:
     )
     try:
         await auto_configure_backup(application)
+        await verify_linked_groups(application)
     except Exception as exc:
-        LOGGER.warning("Auto-config BACKUP impossible: %s", exc)
+        LOGGER.warning("Verification de depart impossible: %s", exc)
 
 
 def ensure_event_loop() -> None:
