@@ -239,11 +239,39 @@ def linked_groups() -> list[int]:
     return [group for group in groups if isinstance(group, int)]
 
 
-def add_linked_group(chat_id: int) -> None:
+def group_title(chat_id: int) -> str:
+    ensure_data()
+    titles = DATA["settings"].get("group_titles")
+    if isinstance(titles, dict):
+        return str(titles.get(str(chat_id)) or "").strip()
+    return ""
+
+
+def set_group_title(chat_id: int, title: str) -> None:
+    ensure_data()
+    titles = DATA["settings"].setdefault("group_titles", {})
+    clean = str(title or "").strip()
+    if clean:
+        titles[str(chat_id)] = clean
+    else:
+        titles.pop(str(chat_id), None)
+    save_data()
+
+
+def add_linked_group(chat_id: int, title: str = "") -> None:
     ensure_data()
     groups = DATA["settings"].setdefault("groups", [])
+    changed = False
     if chat_id not in groups:
         groups.append(chat_id)
+        changed = True
+    clean_title = str(title or "").strip()
+    if clean_title:
+        titles = DATA["settings"].setdefault("group_titles", {})
+        if str(titles.get(str(chat_id))) != clean_title:
+            titles[str(chat_id)] = clean_title
+            changed = True
+    if changed:
         save_data()
 
 
@@ -1278,13 +1306,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         groups = linked_groups()
         lines = []
         for group_id in groups:
-            label = str(group_id)
-            try:
-                chat = await context.bot.get_chat(chat_id=group_id)
-                label = f"{chat.title} ({group_id})"
-            except Exception:
-                pass
-            lines.append(f"• {label}")
+            label = group_title(group_id)
+            if not label:
+                try:
+                    chat = await context.bot.get_chat(chat_id=group_id)
+                    label = chat.title or ""
+                except Exception:
+                    label = ""
+            lines.append(f"• {label} ({group_id})" if label else f"• {group_id}")
         text = "🔗 Serveurs lies (le bot doit etre admin)\n\n"
         text += (
             "\n".join(lines)
@@ -1888,7 +1917,7 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     forwarded_chat = message.forward_from_chat
 
     if state.get("mode") == "add_group" and forwarded_chat:
-        add_linked_group(forwarded_chat.id)
+        add_linked_group(forwarded_chat.id, forwarded_chat.title or "")
         reset_admin_state(user.id, context)
         await message.reply_text(
             f"✅ Serveur lie: {forwarded_chat.title or forwarded_chat.id} ({forwarded_chat.id})",
@@ -1898,7 +1927,7 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if state.get("mode") == "set_backup" and forwarded_chat:
         set_backup_chat_id(forwarded_chat.id)
-        add_linked_group(forwarded_chat.id)
+        add_linked_group(forwarded_chat.id, forwarded_chat.title or "")
         reset_admin_state(user.id, context)
         await message.reply_text(
             f"✅ Serveur BACKUP defini: {forwarded_chat.title or forwarded_chat.id} ({forwarded_chat.id})",
@@ -1958,11 +1987,28 @@ async def my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     new_status = member_update.new_chat_member.status
     if new_status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
-        add_linked_group(chat.id)
+        add_linked_group(chat.id, chat.title or "")
         LOGGER.info("Bot admin dans %s (%s)", chat.id, chat.title)
     elif new_status in (ChatMember.LEFT, ChatMember.KICKED, ChatMember.RESTRICTED):
         remove_linked_group(chat.id)
         LOGGER.info("Bot retire de %s (%s)", chat.id, chat.title)
+
+
+async def auto_configure_backup(application: Application) -> None:
+    ensure_data()
+    if get_backup_chat_id():
+        return
+    for group_id in linked_groups():
+        try:
+            chat = await application.bot.get_chat(chat_id=group_id)
+        except Exception:
+            continue
+        title = (chat.title or "").lower()
+        if "backup" in title or "secours" in title:
+            set_backup_chat_id(group_id)
+            set_group_title(group_id, chat.title or "")
+            LOGGER.info("BACKUP auto-configure: %s (%s)", group_id, chat.title)
+            return
 
 
 async def post_init(application: Application) -> None:
@@ -1975,6 +2021,10 @@ async def post_init(application: Application) -> None:
             BotCommand("unban", "Debannir un utilisateur par ID"),
         ]
     )
+    try:
+        await auto_configure_backup(application)
+    except Exception as exc:
+        LOGGER.warning("Auto-config BACKUP impossible: %s", exc)
 
 
 def ensure_event_loop() -> None:
