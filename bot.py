@@ -966,13 +966,28 @@ def resolve_target_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return None
 
 
+async def can_moderate(update: Update, context: ContextTypes.DEFAULT_TYPE, actor_id: int) -> bool:
+    if is_admin(actor_id):
+        return True
+
+    chat = update.effective_chat
+    if chat is None or chat.type not in ("group", "supergroup", "channel"):
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=actor_id)
+        return member.status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+    except Exception:
+        return False
+
+
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     actor = update.effective_user
     message = update.effective_message
     if actor is None or message is None:
         return
 
-    if not is_admin(actor.id):
+    if not await can_moderate(update, context, actor.id):
         await message.reply_text("🔐 Commande reservee aux admins.")
         return
 
@@ -1009,7 +1024,7 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if actor is None or message is None:
         return
 
-    if not is_admin(actor.id):
+    if not await can_moderate(update, context, actor.id):
         await message.reply_text("🔐 Commande reservee aux admins.")
         return
 
