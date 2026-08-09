@@ -301,9 +301,24 @@ def get_backup_invite() -> str:
     return invite or BACKUP_INVITE_DEFAULT
 
 
+def update_button_url_by_text(fragment: str, url: str) -> None:
+    ensure_data()
+    buttons = DATA["settings"]["approved_post"]["buttons"]
+    fragment_lower = fragment.lower()
+    changed = False
+    for button in buttons:
+        if fragment_lower in (button.get("text") or "").lower():
+            if button.get("url") != url:
+                button["url"] = url
+                changed = True
+    if changed:
+        save_data()
+
+
 def set_backup_invite(invite: str) -> None:
     ensure_data()
     DATA["settings"]["backup_invite"] = invite
+    update_button_url_by_text("backup", invite)
     save_data()
 
 
@@ -461,6 +476,11 @@ def ensure_user(telegram_user) -> dict:
 def get_user(user_id: int) -> dict | None:
     ensure_data()
     return DATA["users"].get(str(user_id))
+
+
+def is_banned(user_id: int) -> bool:
+    record = get_user(user_id)
+    return bool(record and record.get("status") == "banned")
 
 
 def is_admin(user_id: int) -> bool:
@@ -853,13 +873,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if telegram_user is None:
         return
 
+    if is_banned(telegram_user.id):
+        return
+
     user = ensure_user(telegram_user)
     user["subscribed"] = True
-
-    if user.get("status") == "banned":
-        save_data()
-        await update.message.reply_text("⛔ Acces refuse.")
-        return
 
     if is_admin(telegram_user.id):
         user["human_verified"] = True
@@ -919,6 +937,9 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if telegram_user is None:
         return
 
+    if is_banned(telegram_user.id):
+        return
+
     user = ensure_user(telegram_user)
     user["subscribed"] = False
     save_data()
@@ -931,7 +952,9 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     telegram_user = update.effective_user
-    if telegram_user is None or not is_admin(telegram_user.id):
+    if telegram_user is None or is_banned(telegram_user.id):
+        return
+    if not is_admin(telegram_user.id):
         if update.message:
             await update.message.reply_text("🔐 Commande reservee aux admins.")
         return
@@ -945,7 +968,9 @@ async def servers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     actor = update.effective_user
-    if actor is None or not is_admin(actor.id):
+    if actor is None or is_banned(actor.id):
+        return
+    if not is_admin(actor.id):
         if update.message:
             await update.message.reply_text("🔐 Commande reservee aux admins.")
         return
@@ -1023,6 +1048,9 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if actor is None or message is None:
         return
 
+    if is_banned(actor.id):
+        return
+
     if not await can_moderate(update, context, actor.id):
         await message.reply_text("🔐 Commande reservee aux admins.")
         return
@@ -1058,6 +1086,9 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     actor = update.effective_user
     message = update.effective_message
     if actor is None or message is None:
+        return
+
+    if is_banned(actor.id):
         return
 
     if not await can_moderate(update, context, actor.id):
@@ -1113,6 +1144,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     actor_record = ensure_user(actor)
     save_data()
+
+    if is_banned(actor.id):
+        return
 
     if query.data.startswith("gate:captcha:"):
         await handle_captcha_callback(query, actor_record, context)
@@ -1706,6 +1740,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     user = ensure_user(telegram_user)
 
+    if is_banned(telegram_user.id):
+        return
+
     if is_admin(telegram_user.id):
         state = admin_state(telegram_user.id, context)
         mode = state.get("mode")
@@ -1864,6 +1901,9 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     ensure_user(telegram_user)
 
+    if is_banned(telegram_user.id):
+        return
+
     if is_admin(telegram_user.id):
         state = admin_state(telegram_user.id, context)
         if state.get("mode") == "welcome_photo_edit" and message.photo:
@@ -1907,6 +1947,9 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user = update.effective_user
     message = update.effective_message
     if user is None or message is None:
+        return
+
+    if is_banned(user.id):
         return
 
     if not is_admin(user.id):
@@ -1960,9 +2003,17 @@ async def chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     status = record.get("status") if record else "unknown"
     backup_chat_id = get_backup_chat_id()
 
-    if status == "approved" or (
-        backup_chat_id and chat_id == backup_chat_id and status == "pending_backup"
-    ):
+    is_backup_chat = backup_chat_id is not None and chat_id == backup_chat_id
+    if is_backup_chat:
+        allowed = status in ("approved", "pending_backup")
+    elif status == "approved":
+        allowed = True
+        if backup_chat_id and not await is_chat_member(context, backup_chat_id, user_id):
+            allowed = False
+    else:
+        allowed = False
+
+    if allowed:
         try:
             await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
             LOGGER.info("Join request accepte: user %s -> chat %s", user_id, chat_id)
@@ -2007,6 +2058,9 @@ async def auto_configure_backup(application: Application) -> None:
         if "backup" in title or "secours" in title:
             set_backup_chat_id(group_id)
             set_group_title(group_id, chat.title or "")
+            invite = (chat.invite_link or "").strip()
+            if invite:
+                set_backup_invite(invite)
             LOGGER.info("BACKUP auto-configure: %s (%s)", group_id, chat.title)
             return
 
