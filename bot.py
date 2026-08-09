@@ -11,10 +11,16 @@ from pathlib import Path
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
+try:
+    from telegram.constants import ChatMember
+except ImportError:
+    from telegram import ChatMember
 from dotenv import load_dotenv
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    ChatJoinRequestHandler,
+    ChatMemberHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -33,7 +39,7 @@ DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
 TOKEN = os.getenv("BOT_TOKEN", "")
 WELCOME_MESSAGE = os.getenv(
     "WELCOME_MESSAGE",
-    "👋 Bienvenue. Avant d'acceder au bot, il faut passer une verification rapide.",
+    "👋 Bienvenue sur BonPlav by HumaineFC 🔥\nAvant d'acceder au bot, il faut passer une verification rapide.",
 )
 APPROVED_MESSAGE = os.getenv(
     "APPROVED_MESSAGE",
@@ -41,7 +47,18 @@ APPROVED_MESSAGE = os.getenv(
 )
 APPROVED_POST_TEXT = os.getenv(
     "APPROVED_POST_TEXT",
-    APPROVED_MESSAGE,
+    "🚨 BONPLAV — ACCUEIL OFFICIEL 🚨\n\n"
+    "Bienvenue sur BonPlav by HumaineFC 🔥\n\n"
+    "🤖 Retrouvez ici l'ensemble de nos services et de nos différents serveurs, accessibles directement via les boutons ci-dessous.\n\n"
+    "📌 COMMENT ÇA MARCHE ?\n"
+    "• Sélectionne le serveur que tu souhaites rejoindre\n"
+    "• Consulte les informations et services disponibles\n"
+    "• Rejoins directement le serveur correspondant\n\n"
+    "⚡ Simple. Rapide. Accessible.\n\n"
+    "👇 Retrouve tous nos serveurs ci-dessous 👇\n\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "🔥 BONPLAV BY HUMAINEFC\n"
+    "━━━━━━━━━━━━━━━━━━",
 )
 APPROVED_PHOTO_FILE_ID = os.getenv("APPROVED_PHOTO_FILE_ID", "").strip()
 PENDING_MESSAGE = os.getenv(
@@ -57,17 +74,14 @@ REQUIRE_INTRO = os.getenv("REQUIRE_INTRO", "true").lower() in {"1", "true", "yes
 REQUIRE_USERNAME = os.getenv("REQUIRE_USERNAME", "false").lower() in {"1", "true", "yes", "on"}
 
 DEFAULT_MENU_BUTTONS = [
-    {"text": "🔥 Serveur principal", "url": "https://t.me/tonserveur"},
-    {"text": "🛟 Support", "url": "https://t.me/tonsupport"},
+    {"text": "🔥 SERVEUR PRINCIPAL", "url": "https://t.me/+AMh0k16img9hYzZk"},
+    {"text": "💬 LE CHAT", "url": "https://t.me/+dt0f_U1yHb4wNDk0"},
+    {"text": "🛒 O'MARKET", "url": "https://t.me/Omarketbotbot_bot"},
+    {"text": "🔐 BACKUP", "url": "https://t.me/+oOZ75UdUR6JjYjU8"},
 ]
 BUTTON_SLOT_COUNT = 7
-
-
-def empty_button_slots() -> list[dict[str, str]]:
-    return [{"text": "", "url": ""} for _ in range(BUTTON_SLOT_COUNT)]
-
-
-DEFAULT_MENU_BUTTONS = empty_button_slots()
+SETTINGS_VERSION = 2
+BACKUP_INVITE_DEFAULT = "https://t.me/+oOZ75UdUR6JjYjU8"
 
 
 logging.basicConfig(
@@ -183,6 +197,16 @@ def ensure_data() -> None:
 
 def ensure_settings() -> None:
     settings = DATA.setdefault("settings", {})
+
+    if settings.get("version") != SETTINGS_VERSION:
+        settings["approved_post"] = {
+            "caption": APPROVED_POST_TEXT,
+            "photo_file_id": "",
+            "buttons": deepcopy(MENU_BUTTONS),
+        }
+        settings["version"] = SETTINGS_VERSION
+        return
+
     approved_post = settings.setdefault("approved_post", {})
 
     if not isinstance(approved_post.get("caption"), str):
@@ -205,6 +229,143 @@ def ensure_settings() -> None:
         while len(normalized) < BUTTON_SLOT_COUNT:
             normalized.append({"text": "", "url": ""})
         approved_post["buttons"] = normalized[:BUTTON_SLOT_COUNT] or deepcopy(MENU_BUTTONS)
+
+
+def linked_groups() -> list[int]:
+    ensure_data()
+    groups = DATA["settings"].get("groups")
+    if not isinstance(groups, list):
+        return []
+    return [group for group in groups if isinstance(group, int)]
+
+
+def add_linked_group(chat_id: int) -> None:
+    ensure_data()
+    groups = DATA["settings"].setdefault("groups", [])
+    if chat_id not in groups:
+        groups.append(chat_id)
+        save_data()
+
+
+def remove_linked_group(chat_id: int) -> None:
+    ensure_data()
+    groups = DATA["settings"].setdefault("groups", [])
+    if chat_id in groups:
+        groups.remove(chat_id)
+        save_data()
+
+
+def get_backup_chat_id() -> int | None:
+    ensure_data()
+    backup = DATA["settings"].get("backup_chat_id")
+    return backup if isinstance(backup, int) else None
+
+
+def set_backup_chat_id(chat_id: int) -> None:
+    ensure_data()
+    DATA["settings"]["backup_chat_id"] = int(chat_id)
+    save_data()
+
+
+def get_backup_invite() -> str:
+    ensure_data()
+    invite = str(DATA["settings"].get("backup_invite") or os.getenv("BACKUP_INVITE", "") or "").strip()
+    return invite or BACKUP_INVITE_DEFAULT
+
+
+def set_backup_invite(invite: str) -> None:
+    ensure_data()
+    DATA["settings"]["backup_invite"] = invite
+    save_data()
+
+
+async def is_chat_member(context, chat_id: int, user_id: int) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+        return member.status in (ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER)
+    except Exception:
+        return False
+
+
+async def ban_everywhere(context, user_id: int) -> dict[int, bool]:
+    results: dict[int, bool] = {}
+    for chat_id in linked_groups():
+        try:
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            results[chat_id] = True
+        except Exception as exc:
+            LOGGER.warning("Ban de %s dans %s impossible: %s", user_id, chat_id, exc)
+            results[chat_id] = False
+    return results
+
+
+async def unban_everywhere(context, user_id: int) -> dict[int, bool]:
+    results: dict[int, bool] = {}
+    for chat_id in linked_groups():
+        try:
+            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
+            results[chat_id] = True
+        except Exception as exc:
+            LOGGER.warning("Unban de %s dans %s impossible: %s", user_id, chat_id, exc)
+            results[chat_id] = False
+    return results
+
+
+def format_group_results(results: dict[int, bool]) -> str:
+    if not results:
+        return ""
+    ok = sum(1 for accepted in results.values() if accepted)
+    return f"🔨 Serveurs: {ok}/{len(results)}"
+
+
+def backup_join_markup() -> InlineKeyboardMarkup:
+    rows = []
+    invite = get_backup_invite()
+    if invite:
+        rows.append([InlineKeyboardButton("🔗 Rejoindre le serveur BACKUP", url=invite)])
+    rows.append([InlineKeyboardButton("✅ J'ai rejoint", callback_data="gate:backup:check")])
+    return InlineKeyboardMarkup(rows)
+
+
+def backup_join_text() -> str:
+    return (
+        "📌 Derniere etape: rejoins le serveur BACKUP.\n\n"
+        "1. Clique sur le bouton ci-dessous pour rejoindre le serveur.\n"
+        "2. Une fois dedans, appuie sur « J'ai rejoint ».\n\n"
+        "Tant que tu n'es pas dans le BACKUP, tu ne peux pas acceder aux serveurs."
+    )
+
+
+async def proceed_after_verification(
+    user: dict,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    reply_target=None,
+    is_callback: bool,
+) -> None:
+    backup_chat_id = get_backup_chat_id()
+    if backup_chat_id and not await is_chat_member(context, backup_chat_id, user["id"]):
+        set_status(user, "pending_backup")
+        save_data()
+        text = backup_join_text()
+        markup = backup_join_markup()
+        if is_callback and reply_target is not None:
+            try:
+                await reply_target.edit_message_text(text=text, reply_markup=markup)
+                return
+            except Exception:
+                pass
+        await context.bot.send_message(chat_id=user["id"], text=text, reply_markup=markup)
+        return
+
+    await queue_for_approval(user, context)
+    if is_callback and reply_target is not None:
+        try:
+            await reply_target.edit_message_text(text=PENDING_MESSAGE)
+            return
+        except Exception:
+            pass
+    await context.bot.send_message(chat_id=user["id"], text=PENDING_MESSAGE)
 
 
 def approved_post_settings() -> dict:
@@ -306,6 +467,19 @@ def build_admin_menu() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📊 Statistiques", callback_data="admin:stats")],
             [InlineKeyboardButton("👥 Gestion acces", callback_data="admin:access")],
             [InlineKeyboardButton("👀 Voir menu utilisateur", callback_data="admin:usermenu")],
+            [InlineKeyboardButton("🔗 Serveurs lies", callback_data="admin:servers")],
+        ]
+    )
+
+
+def build_servers_admin_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("➕ Ajouter un serveur lie", callback_data="admin:servers:add")],
+            [InlineKeyboardButton("🎯 Choisir le serveur BACKUP", callback_data="admin:servers:backup")],
+            [InlineKeyboardButton("🔗 Modifier le lien BACKUP", callback_data="admin:servers:link")],
+            [InlineKeyboardButton("🗑️ Retirer un serveur lie", callback_data="admin:servers:remove")],
+            [InlineKeyboardButton("⬅️ Retour", callback_data="admin:home")],
         ]
     )
 
@@ -420,6 +594,7 @@ def stats_snapshot() -> dict[str, int]:
         "approved": sum(1 for user in users if user.get("status") == "approved"),
         "pending": sum(1 for user in users if user.get("status") == "pending_approval"),
         "intro": sum(1 for user in users if user.get("status") == "pending_intro"),
+        "backup": sum(1 for user in users if user.get("status") == "pending_backup"),
         "banned": sum(1 for user in users if user.get("status") == "banned"),
         "subscribed": sum(1 for user in users if user.get("subscribed")),
     }
@@ -682,6 +857,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    if user.get("status") == "pending_backup":
+        save_data()
+        await update.message.reply_text(backup_join_text(), reply_markup=backup_join_markup())
+        return
+
     challenge = new_captcha()
     user["last_challenge"] = challenge
     user["human_verified"] = False
@@ -723,6 +903,20 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text("🛠️ Panel admin", reply_markup=build_admin_menu())
 
 
+async def servers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_private_chat(update):
+        await send_private_only_notice(update)
+        return
+
+    actor = update.effective_user
+    if actor is None or not is_admin(actor.id):
+        if update.message:
+            await update.message.reply_text("🔐 Commande reservee aux admins.")
+        return
+
+    await update.message.reply_text("🔗 Serveurs lies", reply_markup=build_servers_admin_menu())
+
+
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_private_chat(update):
         await send_private_only_notice(update)
@@ -760,7 +954,12 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except Exception as exc:
         LOGGER.warning("Impossible de notifier l'utilisateur %s: %s", target_id, exc)
 
-    await message.reply_text(f"⛔ Utilisateur banni: {target_id}")
+    results = await ban_everywhere(context, target_id)
+    if linked_groups():
+        suffix = f"\n{format_group_results(results)}"
+    else:
+        suffix = "\nℹ️ Aucun serveur lie (ajoute le bot en admin dans tes serveurs)."
+    await message.reply_text(f"⛔ Utilisateur banni: {target_id}{suffix}")
 
 
 async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -799,7 +998,12 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except Exception as exc:
         LOGGER.warning("Impossible de notifier l'utilisateur %s: %s", target_id, exc)
 
-    await message.reply_text(f"✅ Utilisateur debanni: {target_id}")
+    results = await unban_everywhere(context, target_id)
+    if linked_groups():
+        suffix = f"\n{format_group_results(results)}"
+    else:
+        suffix = "\nℹ️ Aucun serveur lie (ajoute le bot en admin dans tes serveurs)."
+    await message.reply_text(f"✅ Utilisateur debanni: {target_id}{suffix}")
 
 
 def admin_state(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> dict:
@@ -827,6 +1031,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if query.data.startswith("gate:captcha:"):
         await handle_captcha_callback(query, actor_record, context)
+        return
+
+    if query.data == "gate:backup:check":
+        await handle_backup_check(query, actor_record, context)
         return
 
     if query.data == "menu:refresh":
@@ -992,6 +1200,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"✅ Approuves: {snapshot['approved']}\n"
                 f"⏳ En attente: {snapshot['pending']}\n"
                 f"📝 En presentation: {snapshot['intro']}\n"
+                f"🔐 En backup: {snapshot['backup']}\n"
                 f"⛔ Bannis: {snapshot['banned']}\n"
                 f"📢 Abonnes annonces: {snapshot['subscribed']}"
             ),
@@ -1005,6 +1214,78 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.edit_message_text(
             "Apercu du menu utilisateur",
             reply_markup=build_menu_preview_markup(),
+        )
+        return
+
+    if query.data == "admin:servers":
+        groups = linked_groups()
+        lines = []
+        for group_id in groups:
+            label = str(group_id)
+            try:
+                chat = await context.bot.get_chat(chat_id=group_id)
+                label = f"{chat.title} ({group_id})"
+            except Exception:
+                pass
+            lines.append(f"• {label}")
+        text = "🔗 Serveurs lies (le bot doit etre admin)\n\n"
+        text += (
+            "\n".join(lines)
+            if lines
+            else "Aucun serveur lie pour l'instant.\n\nAjoute le bot en admin dans tes serveurs "
+            "(detection automatique) ou utilise « Ajouter un serveur lie »."
+        )
+        backup_id = get_backup_chat_id()
+        text += f"\n\n🎯 BACKUP: {backup_id}" if backup_id else "\n\n🎯 Aucun BACKUP configure."
+        await query.edit_message_text(text, reply_markup=build_servers_admin_menu())
+        return
+
+    if query.data == "admin:servers:add":
+        state = admin_state(actor.id, context)
+        state.clear()
+        state["mode"] = "add_group"
+        await query.edit_message_text(
+            "➕ Forwarde ici n'importe quel message depuis le serveur a lier (le bot doit y etre admin).",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Annuler", callback_data="admin:servers")]]
+            ),
+        )
+        return
+
+    if query.data == "admin:servers:backup":
+        state = admin_state(actor.id, context)
+        state.clear()
+        state["mode"] = "set_backup"
+        await query.edit_message_text(
+            "🎯 Forwarde ici n'importe quel message depuis le serveur BACKUP.\n\n"
+            "Le bot doit y etre admin pour verifier les membres.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Annuler", callback_data="admin:servers")]]
+            ),
+        )
+        return
+
+    if query.data == "admin:servers:link":
+        state = admin_state(actor.id, context)
+        state.clear()
+        state["mode"] = "set_backup_link"
+        await query.edit_message_text(
+            "🔗 Envoie le lien d'invitation du serveur BACKUP (ex: https://t.me/+...).",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Annuler", callback_data="admin:servers")]]
+            ),
+        )
+        return
+
+    if query.data == "admin:servers:remove":
+        state = admin_state(actor.id, context)
+        state.clear()
+        state["mode"] = "remove_group"
+        await query.edit_message_text(
+            "🗑️ Forwarde ici n'importe quel message depuis le serveur a retirer de la liste.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Annuler", callback_data="admin:servers")]]
+            ),
         )
         return
 
@@ -1146,6 +1427,10 @@ async def handle_captcha_callback(query, user: dict, context: ContextTypes.DEFAU
         )
         return
 
+    if user.get("status") == "pending_backup":
+        await query.edit_message_text(backup_join_text(), reply_markup=backup_join_markup())
+        return
+
     if user.get("status") != "pending_captcha":
         await query.edit_message_text("🔁 Relance /start pour recommencer la verification.")
         return
@@ -1172,8 +1457,27 @@ async def handle_captcha_callback(query, user: dict, context: ContextTypes.DEFAU
         )
         return
 
-    await queue_for_approval(user, context)
-    await query.edit_message_text(PENDING_MESSAGE)
+    await proceed_after_verification(user, context, reply_target=query, is_callback=True)
+
+
+async def handle_backup_check(query, user: dict, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if user.get("status") == "banned":
+        await query.edit_message_text("⛔ Acces refuse.")
+        return
+
+    if user.get("status") == "approved":
+        await send_approved_content(query.from_user.id, context)
+        return
+
+    if user.get("status") == "pending_approval":
+        await query.edit_message_text(PENDING_MESSAGE)
+        return
+
+    if user.get("status") != "pending_backup":
+        await query.edit_message_text("🔁 Relance /start pour continuer la verification.")
+        return
+
+    await proceed_after_verification(user, context, reply_target=query, is_callback=True)
 
 
 async def handle_admin_decision(query, target_id: int, action: str, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1217,6 +1521,18 @@ async def handle_admin_decision(query, target_id: int, action: str, context: Con
         back_callback = "admin:pending" if previous_status == "pending_approval" else "admin:access:approved"
 
     save_data()
+
+    if action in ("ban", "unban"):
+        sync_results = (
+            await ban_everywhere(context, target_id)
+            if action == "ban"
+            else await unban_everywhere(context, target_id)
+        )
+        extra = format_group_results(sync_results)
+        if extra:
+            text += f"\n{extra}"
+        elif not linked_groups():
+            text += "\nℹ️ Aucun serveur lie."
 
     try:
         if action == "approve":
@@ -1380,6 +1696,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+        if mode == "set_backup_link":
+            link = (message.text or "").strip()
+            if not link.startswith(("https://t.me/", "tg://")):
+                await message.reply_text("❌ Envoie un lien d'invitation valide (https://t.me/...).")
+                return
+            set_backup_invite(link)
+            reset_admin_state(telegram_user.id, context)
+            await message.reply_text(
+                "✅ Lien BACKUP mis a jour.",
+                reply_markup=build_servers_admin_menu(),
+            )
+            return
+
         if state.get("mode") == "broadcast_compose":
             state["broadcast_draft"] = {
                 "chat_id": message.chat_id,
@@ -1413,8 +1742,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         user["intro_text"] = intro_text
         user["risk_flags"] = build_risk_flags(user)
-        await queue_for_approval(user, context)
-        await message.reply_text(PENDING_MESSAGE)
+        await proceed_after_verification(user, context, reply_target=None, is_callback=False)
+        return
+
+    if user.get("status") == "pending_backup":
+        await message.reply_text(backup_join_text(), reply_markup=backup_join_markup())
         return
 
     if user.get("status") == "approved":
@@ -1476,6 +1808,100 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await message.reply_text("📝 Envoie du texte pour la verification, ou utilise /start.")
 
 
+async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not is_private_chat(update):
+        return
+
+    user = update.effective_user
+    message = update.effective_message
+    if user is None or message is None:
+        return
+
+    if not is_admin(user.id):
+        await message.reply_text("ℹ️ Envoi forwarde recu.")
+        return
+
+    state = admin_state(user.id, context)
+    forwarded_chat = message.forward_from_chat
+
+    if state.get("mode") == "add_group" and forwarded_chat:
+        add_linked_group(forwarded_chat.id)
+        reset_admin_state(user.id, context)
+        await message.reply_text(
+            f"✅ Serveur lie: {forwarded_chat.title or forwarded_chat.id} ({forwarded_chat.id})",
+            reply_markup=build_servers_admin_menu(),
+        )
+        return
+
+    if state.get("mode") == "set_backup" and forwarded_chat:
+        set_backup_chat_id(forwarded_chat.id)
+        add_linked_group(forwarded_chat.id)
+        reset_admin_state(user.id, context)
+        await message.reply_text(
+            f"✅ Serveur BACKUP defini: {forwarded_chat.title or forwarded_chat.id} ({forwarded_chat.id})",
+            reply_markup=build_servers_admin_menu(),
+        )
+        return
+
+    if state.get("mode") == "remove_group" and forwarded_chat:
+        remove_linked_group(forwarded_chat.id)
+        reset_admin_state(user.id, context)
+        await message.reply_text(
+            f"🗑️ Serveur retire: {forwarded_chat.title or forwarded_chat.id}",
+            reply_markup=build_servers_admin_menu(),
+        )
+        return
+
+    await message.reply_text("ℹ️ Envoi forwarde recu. Utilise /admin pour le menu admin.")
+
+
+async def chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    join = update.chat_join_request
+    if join is None:
+        return
+
+    chat_id = join.chat.id
+    user_id = join.from_user.id
+    add_linked_group(chat_id)
+
+    record = get_user(user_id)
+    status = record.get("status") if record else "unknown"
+    backup_chat_id = get_backup_chat_id()
+
+    if status == "approved" or (
+        backup_chat_id and chat_id == backup_chat_id and status == "pending_backup"
+    ):
+        try:
+            await context.bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            LOGGER.info("Join request accepte: user %s -> chat %s", user_id, chat_id)
+        except Exception as exc:
+            LOGGER.warning("Impossible d'accepter la demande %s -> %s: %s", user_id, chat_id, exc)
+    else:
+        try:
+            await context.bot.decline_chat_join_request(chat_id=chat_id, user_id=user_id)
+            LOGGER.info("Join request refuse: user %s -> chat %s (statut %s)", user_id, chat_id, status)
+        except Exception as exc:
+            LOGGER.warning("Impossible de refuser la demande %s -> %s: %s", user_id, chat_id, exc)
+
+
+async def my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat is None or chat.type not in ("group", "supergroup", "channel"):
+        return
+
+    member_update = update.my_chat_member
+    if member_update is None:
+        return
+
+    new_status = member_update.new_chat_member.status
+    if new_status in (ChatMember.ADMINISTRATOR, ChatMember.OWNER):
+        add_linked_group(chat.id)
+        LOGGER.info("Bot admin dans %s (%s)", chat.id, chat.title)
+    elif new_status in (ChatMember.LEFT, ChatMember.KICKED, ChatMember.RESTRICTED):
+        remove_linked_group(chat.id)
+        LOGGER.info("Bot retire de %s (%s)", chat.id, chat.title)
+
+
 async def post_init(application: Application) -> None:
     await application.bot.set_my_commands(
         [
@@ -1510,11 +1936,15 @@ def main() -> None:
     app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(CommandHandler("ban", ban_command))
     app.add_handler(CommandHandler("unban", unban_command))
+    app.add_handler(CommandHandler("servers", servers_command))
+    app.add_handler(ChatMemberHandler(my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatJoinRequestHandler(chat_join_request))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.ALL, handle_media))
     app.add_error_handler(error_handler)
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=False)
 
 
 if __name__ == "__main__":

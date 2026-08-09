@@ -32,39 +32,41 @@
     }
   },
   "settings": {
+    "version": 2,
     "approved_post": {
-      "caption": "\ud83d\udea8 SHOP2TECH \u2013 ACCUEIL OFFICIEL \ud83d\udea8\n\nBienvenue sur Shop2Tech \ud83d\udd25\n\ud83d\ude0f Plateforme rapide, automatis\u00e9e et accessible 24h/24\n\n\ud83d\udc51INFOS IMPORTANTES\n\u2022 Shop actif 24h/24 \u2013 7j/7\n\u2022 Commandes principalement sur le site web\n\u2022 Certaines fonctions encore via O\u2019Market\n\u2022 Paiements : PayPal / Crypto\n\u2022 Syst\u00e8me rapide et automatis\u00e9\n\u2e3b\n\ud83d\udd25Shop2Tech \u2013 Simple. Rapide. Efficace. \ud83d\udd25",
-      "photo_file_id": "AgACAgQAAxkBAANXafpDoNUEjuELcE_Bly1lPti_HIkAAscOaxudINFTT2DRF-xlAfkBAAMCAAN5AAM7BA",
+      "caption": "🚨 BONPLAV — ACCUEIL OFFICIEL 🚨\n\nBienvenue sur BonPlav by HumaineFC 🔥\n\n🤖 Retrouvez ici l'ensemble de nos services et de nos différents serveurs, accessibles directement via les boutons ci-dessous.\n\n📌 COMMENT ÇA MARCHE ?\n• Sélectionne le serveur que tu souhaites rejoindre\n• Consulte les informations et services disponibles\n• Rejoins directement le serveur correspondant\n\n⚡ Simple. Rapide. Accessible.\n\n👇 Retrouve tous nos serveurs ci-dessous 👇\n\n━━━━━━━━━━━━━━━━━━\n🔥 BONPLAV BY HUMAINEFC\n━━━━━━━━━━━━━━━━━━",
+      "photo_file_id": "",
       "buttons": [
         {
-          "text": "\ud83c\udf10 SITE WEB",
-          "url": "https://shop2tech.com"
+          "text": "🔥 SERVEUR PRINCIPAL",
+          "url": "https://t.me/+AMh0k16img9hYzZk"
         },
         {
-          "text": "\ud83d\udd25 Serveur principal",
-          "url": "https://t.me/+OhCmAr02zqA1MjI0"
+          "text": "💬 LE CHAT",
+          "url": "https://t.me/+dt0f_U1yHb4wNDk0"
         },
         {
-          "text": "\ud83d\udcf1SERVEUR UBER -50   DISCORD",
-          "url": "https://discord.gg/B6P9MRJXHh"
+          "text": "🛒 O'MARKET",
+          "url": "https://t.me/Omarketbotbot_bot"
         },
         {
-          "text": "\ud83e\udd16 BOT O\u2019MARKET",
-          "url": "https://t.me/OMarket13_bot"
+          "text": "🔐 BACKUP",
+          "url": "https://t.me/+oOZ75UdUR6JjYjU8"
         },
         {
-          "text": "\ud83d\udcf1 SERVEUR PRINCIPAL DISCORD",
-          "url": "https://discord.gg/ReFngJtgaZ"
+          "text": "",
+          "url": ""
         },
         {
-          "text": "\ud83d\udedf SERVEUR DE SECOURS (BACKUP)",
-          "url": "https://t.me/+qHKXnCY3zEg0YmNk"
+          "text": "",
+          "url": ""
         },
         {
-          "text": "\ud83d\udcf1 SERVEUR SIGNAL",
-          "url": "https://signal.group/#CjQKIN_A_RokxfjRYGgRRy7oKbLUaV7tPzBuNvPboIDX0VIlEhBeQj2yACoR4hOHLs05BJd5"
+          "text": "",
+          "url": ""
         }
       ]
-    }
+    },
+    "backup_invite": "https://t.me/+oOZ75UdUR6JjYjU8"
   }
 }
