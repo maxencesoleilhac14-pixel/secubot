@@ -372,10 +372,10 @@ def backup_join_markup() -> InlineKeyboardMarkup:
 
 def backup_join_text() -> str:
     return (
-        "📌 Derniere etape: rejoins le serveur BACKUP.\n\n"
-        "1. Clique sur le bouton ci-dessous pour rejoindre le serveur.\n"
+        "🔒 Pour acceder au serveur, tu dois d'abord rejoindre le serveur BACKUP.\n\n"
+        "1. Clique sur le bouton ci-dessous pour rejoindre le BACKUP.\n"
         "2. Une fois dedans, appuie sur « J'ai rejoint ».\n\n"
-        "Tant que tu n'es pas dans le BACKUP, tu ne peux pas acceder aux serveurs."
+        "Tant que tu n'es pas dans le BACKUP, l'acces aux serveurs est bloque."
     )
 
 
@@ -2055,6 +2055,21 @@ async def chat_join_request(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             LOGGER.info("Join request refuse: user %s -> chat %s (statut %s)", user_id, chat_id, status)
         except Exception as exc:
             LOGGER.warning("Impossible de refuser la demande %s -> %s: %s", user_id, chat_id, exc)
+
+        if status != "banned" and not is_backup_chat:
+            if status == "pending_approval":
+                prompt = (
+                    "⏳ Ta demande d'acces est en cours de validation par un admin.\n\n"
+                    "Tu pourras rejoindre le serveur des qu'elle est acceptee."
+                )
+                markup = None
+            else:
+                prompt = backup_join_text()
+                markup = backup_join_markup()
+            try:
+                await context.bot.send_message(chat_id=user_id, text=prompt, reply_markup=markup)
+            except Exception as exc:
+                LOGGER.warning("Impossible de notifier %s: %s", user_id, exc)
 
 
 async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
