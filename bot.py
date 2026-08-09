@@ -833,6 +833,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("⛔ Acces refuse.")
         return
 
+    if is_admin(telegram_user.id):
+        user["human_verified"] = True
+        set_status(user, "approved")
+        user["approved_at"] = user.get("approved_at") or utc_now()
+        save_data()
+        await send_approved_content(update.effective_chat.id, context)
+        return
+
     if REQUIRE_USERNAME and not user.get("username"):
         save_data()
         await update.message.reply_text(
@@ -1660,7 +1668,6 @@ async def confirm_broadcast(query, admin_id: int, context: ContextTypes.DEFAULT_
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_private_chat(update):
-        await send_private_only_notice(update)
         return
 
     telegram_user = update.effective_user
@@ -1775,6 +1782,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             return
 
+        if not state.get("mode"):
+            await message.reply_text("🔧 Utilise /admin pour ouvrir le panel admin.")
+            return
+
     if user.get("status") == "pending_intro":
         intro_text = (message.text or "").strip()
         if not intro_text:
@@ -1815,7 +1826,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_private_chat(update):
-        await send_private_only_notice(update)
         return
 
     telegram_user = update.effective_user
@@ -1852,6 +1862,10 @@ async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     ]
                 ),
             )
+            return
+
+        if not state.get("mode"):
+            await message.reply_text("🔧 Utilise /admin pour ouvrir le panel admin.")
             return
 
     await message.reply_text("📝 Envoie du texte pour la verification, ou utilise /start.")
